@@ -1,177 +1,150 @@
 import streamlit as st
-import json
 import pickle
-from barfi import st_barfi, barfi_schemas, Block
+from barfi import save_schema, barfi_schemas, Block, st_barfi
+from barfi.manage_schema import delete_schema, load_schema_name
+from typing import Dict
+import json
+import time
+import ast
 
-# Существующий функционал
-def load_schemas():
+
+def load_schemas(barfi_file_name) -> Dict:
     try:
-        with open('schemas.pkl', 'rb') as f:
-            return pickle.load(f)
+        with open(f'./data_to_merge/{barfi_file_name}', 'rb') as handle_read:
+            schemas = pickle.load(handle_read)
     except FileNotFoundError:
-        return {}
+        schemas = {}
+    return schemas
 
-def save_schemas(schemas):
-    with open('schemas.pkl', 'wb') as f:
-        pickle.dump(schemas, f)
 
-def save_schema(name, schema):
-    schemas = load_schemas()
-    schemas[name] = schema
-    save_schemas(schemas)
+def create_scheme(name, schema_data):
+    existing_schemes = barfi_schemas()
+    try:
+        schema_data = ast.literal_eval(schema_data)
+        if not type(schema_data) == dict:
+            schema_data = ""
+        if name in existing_schemes:
+            st.toast("Схема с указанным названием существует", icon='⚠️')
+            time.sleep(1)
+            return
+    except:
+        schema_data = ""
+    save_schema(name, schema_data)
+    st.success("Схема успешно сохранена!")
 
-def delete_schema(name):
-    schemas = load_schemas()
-    if name in schemas:
-        del schemas[name]
-        save_schemas(schemas)
-        return True
-    else:
-        return False
 
-def merge_schemas(files):
-    merged_schemas = load_schemas()
-    merged_schema = {}
+def delete_scheme(name):
+    st.balloons()
+    delete_schema(name)
+    st.success(f"Схема '{name}' успешно удалена.")
 
-    for file in files:
-        try:
-            if file.name.endswith('.barfi'):
-                new_schemas = json.loads(file.getvalue().decode('utf-8'))
-            elif file.name.endswith('.pkl'):
-                new_schemas = pickle.loads(file.getvalue())
-            else:
-                st.error(f"Некорректный формат файла: {file.name}")
-                continue
 
-            # Объединение всех схем в одну объединенную схему
-            for name, schema in new_schemas.items():
-                if name in merged_schema:
-                    new_name = f"{name}_merged"
-                    st.warning(f"Конфликт для {name}. Переименовано в {new_name}")
-                    merged_schema[new_name] = schema
-                else:
-                    merged_schema[name] = schema
+def merge_files(result_file_name, schemes_array):
+    schemas = {}
+    for item in schemes_array:
+        with open(f'{result_file_name}', 'wb') as handle_write:
+            schemas[item.get('scheme_name')] = item.get('scheme_data')
+            pickle.dump(schemas, handle_write, protocol=pickle.HIGHEST_PROTOCOL)
+    st.success("Схемы успешно объединены!")
 
-        except json.JSONDecodeError as je:
-            st.error(f"Ошибка при загрузке JSON файла {file.name}: {je}")
-        except pickle.UnpicklingError as pe:
-            st.error(f"Ошибка при загрузке pickle файла {file.name}: {pe}")
-        except Exception as e:
-            st.error(f"Ошибка при загрузке файла {file.name}: {e}")
 
-    # Сохранение объединенной схемы под именем merged_schema
-    merged_schemas["merged_schema"] = merged_schema
-    save_schemas(merged_schemas)
-    return merged_schemas
+def make_base_blocks():
+    feed = Block(name='Feed')
+    feed.add_output()
 
-# Основное приложение Streamlit
+    def feed_func(self):
+        self.set_interface(name='Выход 1', value=4)
+
+    feed.add_compute(feed_func)
+
+    splitter = Block(name='Splitter')
+    splitter.add_input()
+    splitter.add_output()
+    splitter.add_output()
+
+    def splitter_func(self):
+        in_1 = self.get_interface(name='Вход 1')
+        value = in_1 / 2
+        self.set_interface(name='Выход 1', value=value)
+        self.set_interface(name='Выход 2', value=value)
+
+    splitter.add_compute(splitter_func)
+
+    mixer = Block(name='Mixer')
+    mixer.add_input()
+    mixer.add_input()
+    mixer.add_output()
+
+    def mixer_func(self):
+        in_1 = self.get_interface(name='Вход 1')
+        in_2 = self.get_interface(name='Вход 2')
+        value = in_1 + in_2
+        self.set_interface(name='Выход 1', value=value)
+
+    mixer.add_compute(mixer_func)
+
+    result = Block(name='Result')
+    result.add_input()
+
+    def result_func(self):
+        in_1 = self.get_interface(name='Вход 1')
+
+    result.add_compute(result_func)
+    return [feed, splitter, mixer, result]
+
+
 def main():
     st.title("Редактор Barfi-схем")
 
-    # Sidebar для навигации
-    menu = st.sidebar.radio("Меню", [
-        "Создание схемы",
-        "Список схем",
-        "Просмотр схемы",
-        "Удаление схемы",
-        "Слияние схем"
-    ])
+    # Создание схемы
+    with st.expander("Создание схемы"):
+        st.write("Введите данные для новой схемы.")
+        name = st.text_input("Название схемы:")
+        schema_data = st.text_area("Данные схемы (в формате JSON):")
+        if st.button("Сохранить новую схему"):
+            create_scheme(name, schema_data)
 
-    if menu == "Создание схемы":
-        st.header("Создание схемы")
+    # Список схем
+    with st.expander("Список схем"):
+        schemas = barfi_schemas()
+        if schemas:
+            for item in schemas:
+                st.write(f"**{item}**")
+                st.json(load_schema_name(item))
+        else:
+            st.info("Сохранённых схем пока нет.")
 
-        # Создание блоков схемы
-        feed = Block(name='Feed')
-        feed.add_output()
-        def feed_func(self):
-            self.set_interface(name='Output 1', value=4)
-        feed.add_compute(feed_func)
+    # Просмотр схемы
+    with st.expander("Просмотр схемы"):
+        load_schema = st.selectbox("Выберите схему для просмотра:", barfi_schemas())
+        if load_schema:
+            barfi_result = st_barfi(base_blocks=make_base_blocks(), load_schema=load_schema, compute_engine=False)
+            if barfi_result:
+                st.json(barfi_result)
 
-        splitter = Block(name='Splitter')
-        splitter.add_input()
-        splitter.add_output()
-        splitter.add_output()
-        def splitter_func(self):
-            in_1 = self.get_interface(name='Input 1')
-            value = (in_1 / 2)
-            self.set_interface(name='Output 1', value=value)
-            self.set_interface(name='Output 2', value=value)
-        splitter.add_compute(splitter_func)
+    # Удаление схемы
+    with st.expander("Удаление схемы"):
+        schemas = barfi_schemas()
+        if schemas:
+            option = st.selectbox("Выберите схему для удаления:", schemas)
+            if st.button("Удалить выбранную схему"):
+                delete_scheme(option)
+        else:
+            st.info("Нет доступных схем для удаления.")
 
-        mixer = Block(name='Mixer')
-        mixer.add_input()
-        mixer.add_input()
-        mixer.add_output()
-        def mixer_func(self):
-            in_1 = self.get_interface(name='Input 1')
-            in_2 = self.get_interface(name='Input 2')
-            value = (in_1 + in_2)
-            self.set_interface(name='Output 1', value=value)
-        mixer.add_compute(mixer_func)
+    # Слияние схем
+    with st.expander("Слияние схем"):
+        uploaded_files = st.file_uploader("Выберите файлы со схемами (.barfi):", type=['barfi'],
+                                          accept_multiple_files=True)
+        if uploaded_files:
+            total_schemes = []
+            for item in uploaded_files:
+                bar_dic = load_schemas(item.name)
+                for key in bar_dic.keys():
+                    total_schemes.append({"scheme_name": key, "scheme_data": bar_dic.get(key)})
+            if st.button("Объединить схемы"):
+                merge_files('schemas.barfi', total_schemes)
 
-        result = Block(name='Result')
-        result.add_input()
-        def result_func(self):
-            in_1 = self.get_interface(name='Input 1')
-        result.add_compute(result_func)
-
-        # Создание и работа с схемой Barfi
-        load_schema = st.selectbox('Выберите сохраненную схему:', barfi_schemas())
-        compute_engine = st.checkbox('Активировать вычислительный движок Barfi', value=False)
-        barfi_result = st_barfi(base_blocks=[feed, result, mixer, splitter], compute_engine=compute_engine, load_schema=load_schema)
-
-        schema_name = st.text_input("Введите название для сохранения схемы")
-        if st.button("Сохранить"):
-            if schema_name and barfi_result:
-                schema_json = json.dumps(barfi_result, ensure_ascii=False, indent=4)
-                save_schema(schema_name, schema_json)
-                with open(f"{schema_name}.barfi", "w") as f:
-                    f.write(schema_json)
-                st.success(f"Barfi-схема '{schema_name}' сохранена")
-            else:
-                st.error("Схема пуста, сохранение невозможно.")
-
-        if barfi_result:
-            st.write(barfi_result)
-
-    elif menu == "Список схем":
-        st.header("Список схем")
-        schemas = load_schemas()
-        for name in schemas.keys():
-            st.write(name)
-
-    elif menu == "Просмотр схемы":
-        st.header("Просмотр схемы")
-        schemas = load_schemas()
-        schema_name = st.selectbox("Выберите схему", list(schemas.keys()))
-        if schema_name:
-            schema_data = schemas[schema_name]
-            st.json(schema_data)  # Вывод данных в формате JSON
-
-    elif menu == "Удаление схемы":
-        st.header("Удаление схемы")
-        schema_name = st.text_input("Название схемы для удаления")
-        if st.button("Удалить"):
-            if delete_schema(schema_name):
-                st.success(f"Схема '{schema_name}' удалена.")
-            else:
-                st.error("Схема не найдена.")
-
-    elif menu == "Слияние схем":
-        st.header("Слияние схем")
-        uploaded_files = st.file_uploader(
-            "Выберите .barfi файлы",
-            type=['barfi', 'pkl'],
-            accept_multiple_files=True
-        )
-        if st.button("Объединить схемы"):
-            if uploaded_files:
-                merged_schemas = merge_schemas(uploaded_files)
-                st.success("Схемы объединены")
-                if st.button("Вернуться в главное меню"):
-                    st.experimental_rerun()
-            else:
-                st.error("Не выбраны файлы для слияния")
 
 if __name__ == "__main__":
     main()
